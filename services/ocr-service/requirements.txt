@@ -1,0 +1,9 @@
+fastapi==0.115.6
+httpx==0.28.1
+minio==7.2.12
+pillow==11.1.0
+pydantic==2.10.5
+pymupdf==1.25.2
+pytesseract==0.3.13
+pytest==8.3.4
+uvicorn==0.34.0

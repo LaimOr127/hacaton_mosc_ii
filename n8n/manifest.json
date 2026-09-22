@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "workflows": [
+    {"file": "API-12-Health-Summary.json", "public": true}
+  ]
+}
