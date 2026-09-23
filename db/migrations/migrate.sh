@@ -17,6 +17,9 @@ for migration in /migrations/V*.sql; do
     [ "$stored" = "$checksum" ] || { echo "checksum mismatch for $version" >&2; exit 1; }
     continue
   fi
-  psql --dbname "$APP_DB_NAME" -v ON_ERROR_STOP=1 -1 -f "$migration"
-  psql --dbname "$APP_DB_NAME" -v ON_ERROR_STOP=1 -c "INSERT INTO schema_migrations(version, checksum) VALUES ('$version', '$checksum')"
+  psql --dbname "$APP_DB_NAME" -v ON_ERROR_STOP=1 -1 \
+    --set=app_user="$APP_DB_USER" \
+    --set=app_db="$APP_DB_NAME" \
+    -f "$migration" \
+    -c "INSERT INTO schema_migrations(version, checksum) VALUES ('$version', '$checksum')"
 done

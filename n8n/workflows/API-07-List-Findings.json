@@ -1,0 +1,35 @@
+{
+  "id": "api07ListFinding1",
+  "name": "API-07 List Findings",
+  "nodes": [
+    {
+      "id": "89ecf502-cd5c-45c6-9b11-45348a768b19",
+      "webhookId": "89ecf502-cd5c-45c6-9b11-45348a768b19",
+      "name": "List findings webhook",
+      "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [0, 0],
+      "parameters": {"httpMethod": "GET", "path": "api/v1/inspections/:id/findings", "responseMode": "responseNode", "options": {}}
+    },
+    {
+      "id": "9ef881dd-a7ec-4218-bbb2-21e93ba42056",
+      "name": "Select findings",
+      "type": "n8n-nodes-base.postgres", "typeVersion": 2.6, "position": [220, 0],
+      "credentials": {"postgres": {"id": "appPostgresCred0001", "name": "Application PostgreSQL"}},
+      "parameters": {
+        "resource": "database", "operation": "executeQuery",
+        "query": "SELECT jsonb_build_object('items',COALESCE((SELECT jsonb_agg(to_jsonb(p)) FROM (SELECT id,finding_type,entity_type,canonical_key,field_name,expected_value,actual_value,severity,status,title,created_at FROM findings WHERE inspection_id=$1::uuid ORDER BY created_at,id LIMIT LEAST(GREATEST($3::integer,1),100) OFFSET (GREATEST($2::integer,1)-1)*LEAST(GREATEST($3::integer,1),100)) p),'[]'::jsonb),'page',GREATEST($2::integer,1),'page_size',LEAST(GREATEST($3::integer,1),100),'total',(SELECT count(*) FROM findings WHERE inspection_id=$1::uuid)) AS data",
+        "options": {"queryReplacement": "={{ [$node['List findings webhook'].json.params.id, $node['List findings webhook'].json.query.page || 1, $node['List findings webhook'].json.query.page_size || 20] }}"}
+      }
+    },
+    {
+      "id": "0aa89d7c-6937-4dbd-aae4-a10da5996d24",
+      "name": "Respond findings",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1.4, "position": [440, 0],
+      "parameters": {"respondWith": "json", "responseBody": "={\"data\":{{ JSON.stringify($json.data) }},\"error\":null}", "options": {"responseCode": 200}}
+    }
+  ],
+  "connections": {
+    "List findings webhook": {"main": [[{"node": "Select findings", "type": "main", "index": 0}]]},
+    "Select findings": {"main": [[{"node": "Respond findings", "type": "main", "index": 0}]]}
+  },
+  "pinData": {}, "active": true, "settings": {"executionOrder": "v1"}, "versionId": "1"
+}

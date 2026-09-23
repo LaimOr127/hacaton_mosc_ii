@@ -14,7 +14,8 @@ body {
 }
 
 button,
-input {
+input,
+textarea {
   font: inherit;
 }
 
@@ -38,13 +39,19 @@ button.ghost {
   background: #dcece8;
 }
 
-input {
+input,
+textarea {
   width: 100%;
   min-height: 40px;
   border: 1px solid #c7d3d0;
   border-radius: 6px;
   padding: 8px 10px;
   background: white;
+}
+
+textarea {
+  min-height: 90px;
+  resize: vertical;
 }
 
 label {
@@ -198,6 +205,27 @@ h2 {
   margin-bottom: 12px;
 }
 
+.finding-meta {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0 0 16px;
+}
+
+.finding-meta div {
+  min-width: 0;
+}
+
+.finding-meta dt {
+  color: #667873;
+  font-size: 0.82rem;
+}
+
+.finding-meta dd {
+  overflow-wrap: anywhere;
+  margin: 4px 0 0;
+}
+
 .evidence {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -212,6 +240,22 @@ h2 {
   background: #fbfcfc;
 }
 
+.evidence-body {
+  display: grid;
+  gap: 8px;
+}
+
+.evidence iframe {
+  width: 100%;
+  height: 320px;
+  border: 1px solid #dbe4e1;
+  border-radius: 6px;
+}
+
+.review-comment {
+  margin-top: 16px;
+}
+
 .bad {
   color: #9f2d1d;
 }
@@ -219,6 +263,7 @@ h2 {
 @media (max-width: 860px) {
   .topbar,
   .grid,
+  .finding-meta,
   .evidence {
     grid-template-columns: 1fr;
   }

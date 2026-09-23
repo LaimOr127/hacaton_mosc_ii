@@ -1,0 +1,49 @@
+{
+  "id": "api11DownloadUrl1",
+  "name": "API-11 Get Document Download URL",
+  "nodes": [
+    {
+      "id": "b0c7d57f-e1a4-4ef4-a3ef-58a29cd6f873",
+      "webhookId": "b0c7d57f-e1a4-4ef4-a3ef-58a29cd6f873",
+      "name": "Download URL webhook",
+      "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [0, 0],
+      "parameters": {"httpMethod": "GET", "path": "api/v1/documents/:id/download-url", "responseMode": "responseNode", "options": {}}
+    },
+    {
+      "id": "28a8f592-9bb4-4dcc-bbfd-4b5eb7ff378e",
+      "name": "Select stored document",
+      "type": "n8n-nodes-base.postgres", "typeVersion": 2.6, "position": [220, 0],
+      "credentials": {"postgres": {"id": "appPostgresCred0001", "name": "Application PostgreSQL"}},
+      "parameters": {
+        "resource": "database", "operation": "executeQuery",
+        "query": "SELECT storage_bucket,storage_key FROM documents WHERE id=$1::uuid AND status IN ('READY','PROCESSED')",
+        "options": {"queryReplacement": "={{ [$node['Download URL webhook'].json.params.id] }}"}
+      }
+    },
+    {
+      "id": "d799632f-0af7-472e-b018-d92405f2baac",
+      "name": "Presign GET",
+      "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [440, 0],
+      "credentials": {"httpHeaderAuth": {"id": "internalBearerCred01", "name": "Internal Bearer"}},
+      "parameters": {
+        "method": "POST", "url": "http://storage-api:8000/v1/objects/presign-get",
+        "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
+        "sendBody": true, "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({bucket:$json.storage_bucket,key:$json.storage_key}) }}",
+        "options": {"timeout": 10000}
+      }
+    },
+    {
+      "id": "fe10db55-8f88-4407-87d8-7475766990b1",
+      "name": "Respond download URL",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1.4, "position": [660, 0],
+      "parameters": {"respondWith": "json", "responseBody": "={\"data\":{\"url\":{{ JSON.stringify($json.url) }},\"expires_seconds\":{{ $json.expires_seconds }}},\"error\":null}", "options": {"responseCode": 200}}
+    }
+  ],
+  "connections": {
+    "Download URL webhook": {"main": [[{"node": "Select stored document", "type": "main", "index": 0}]]},
+    "Select stored document": {"main": [[{"node": "Presign GET", "type": "main", "index": 0}]]},
+    "Presign GET": {"main": [[{"node": "Respond download URL", "type": "main", "index": 0}]]}
+  },
+  "pinData": {}, "active": true, "settings": {"executionOrder": "v1"}, "versionId": "1"
+}

@@ -1,0 +1,35 @@
+{
+  "id": "api08GetFinding01",
+  "name": "API-08 Get Finding",
+  "nodes": [
+    {
+      "id": "b8459263-0494-4bae-90c9-43283c67640a",
+      "webhookId": "b8459263-0494-4bae-90c9-43283c67640a",
+      "name": "Get finding webhook",
+      "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [0, 0],
+      "parameters": {"httpMethod": "GET", "path": "api/v1/findings/:id", "responseMode": "responseNode", "options": {}}
+    },
+    {
+      "id": "22afef0c-95c0-4cb8-a446-287d8e13c9cc",
+      "name": "Select finding",
+      "type": "n8n-nodes-base.postgres", "typeVersion": 2.6, "position": [220, 0],
+      "credentials": {"postgres": {"id": "appPostgresCred0001", "name": "Application PostgreSQL"}},
+      "parameters": {
+        "resource": "database", "operation": "executeQuery",
+        "query": "SELECT f.id,f.inspection_id,f.finding_type,f.entity_type,f.canonical_key,f.field_name,f.expected_value,f.actual_value,f.absolute_delta,f.relative_delta,f.severity,f.status,f.title,f.description,f.explanation,f.detector_version,f.dedup_key,f.created_at,f.updated_at,COALESCE((SELECT jsonb_agg(jsonb_build_object('side',e.side,'document_id',e.document_id,'document_name',d.original_filename,'document_stage',d.stage,'page_id',e.page_id,'page_number',p.page_number,'text_block_id',e.text_block_id,'bbox',e.bbox,'quote',e.quote,'entity_id',e.entity_id,'download_url','/api/v1/documents/' || d.id || '/download-url') ORDER BY e.side,e.id) FROM finding_evidence e JOIN document_pages p ON p.id=e.page_id JOIN documents d ON d.id=e.document_id WHERE e.finding_id=f.id),'[]'::jsonb) AS evidence FROM findings f WHERE f.id=$1::uuid",
+        "options": {"queryReplacement": "={{ [$node['Get finding webhook'].json.params.id] }}"}
+      }
+    },
+    {
+      "id": "2414dc07-9bd3-44c9-81cb-2eb78dcf1bf4",
+      "name": "Respond finding",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1.4, "position": [440, 0],
+      "parameters": {"respondWith": "json", "responseBody": "={\"data\":{{ JSON.stringify($json) }},\"error\":null}", "options": {"responseCode": 200}}
+    }
+  ],
+  "connections": {
+    "Get finding webhook": {"main": [[{"node": "Select finding", "type": "main", "index": 0}]]},
+    "Select finding": {"main": [[{"node": "Respond finding", "type": "main", "index": 0}]]}
+  },
+  "pinData": {}, "active": true, "settings": {"executionOrder": "v1"}, "versionId": "1"
+}

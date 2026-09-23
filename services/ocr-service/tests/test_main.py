@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from fastapi.testclient import TestClient
 from PIL import Image
 
@@ -48,3 +50,81 @@ def test_recognize_page(monkeypatch):
     assert body["raw_text"] == "Д-14"
     assert body["blocks"][0]["source"] == "OCR"
     assert body["engine"] == "tesseract"
+
+
+def test_ocr_words_are_grouped_into_lines(monkeypatch):
+    monkeypatch.setattr(
+        main.pytesseract,
+        "image_to_data",
+        lambda *args, **kwargs: {
+            "text": ["Door", "D-14:", "800", "mm", "Wall", "S-1:", "150", "mm"],
+            "conf": [90] * 8,
+            "left": [10, 60, 130, 180, 10, 60, 130, 180],
+            "top": [10] * 4 + [60] * 4,
+            "width": [40] * 8,
+            "height": [20] * 8,
+            "block_num": [1] * 8,
+            "par_num": [1] * 8,
+            "line_num": [1] * 4 + [2] * 4,
+        },
+    )
+
+    raw_text, blocks = main.recognize_image(Image.new("RGB", (300, 100)), "eng", 10)
+
+    assert len(blocks) == 2
+    assert blocks[0].text == "Door D-14: 800 mm"
+    assert blocks[1].text == "Wall S-1: 150 mm"
+    assert blocks[0].bbox.x0 == 10 / 300
+    assert raw_text == "Door D-14: 800 mm\nWall S-1: 150 mm"
+
+
+class _ObjectResponse:
+    def __init__(self, data: bytes):
+        self.data = data
+
+    def read(self, amount: int) -> bytes:
+        return self.data[:amount]
+
+    def close(self) -> None:
+        pass
+
+    def release_conn(self) -> None:
+        pass
+
+
+class _MinioStub:
+    def __init__(self, data: bytes, size: int | None = None):
+        self.data = data
+        self.size = len(data) if size is None else size
+        self.calls: list[tuple[str, str, str]] = []
+
+    def stat_object(self, bucket: str, storage_key: str):
+        self.calls.append(("stat", bucket, storage_key))
+        return SimpleNamespace(size=self.size)
+
+    def get_object(self, bucket: str, storage_key: str):
+        self.calls.append(("get", bucket, storage_key))
+        return _ObjectResponse(self.data)
+
+
+def test_load_object_reads_minio_with_limit(monkeypatch):
+    store = _MinioStub(b"pdf")
+    monkeypatch.setattr(main, "minio_client", lambda: store)
+    monkeypatch.setattr(main.settings, "max_pdf_bytes", 10)
+
+    assert main.load_object("documents", "a/doc.pdf") == b"pdf"
+    assert store.calls == [("stat", "documents", "a/doc.pdf"), ("get", "documents", "a/doc.pdf")]
+
+
+def test_load_object_rejects_oversize_before_download(monkeypatch):
+    store = _MinioStub(b"too large", size=100)
+    monkeypatch.setattr(main, "minio_client", lambda: store)
+    monkeypatch.setattr(main.settings, "max_pdf_bytes", 10)
+
+    try:
+        main.load_object("documents", "big.pdf")
+    except main.HTTPException as exc:
+        assert exc.status_code == 413
+    else:
+        raise AssertionError("expected oversize PDF rejection")
+    assert store.calls == [("stat", "documents", "big.pdf")]

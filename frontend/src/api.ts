@@ -45,14 +45,43 @@ export type Inspection = {
 
 export type Finding = {
   id: string;
+  finding_type: string;
   severity: string;
   status: string;
-  type: string;
   title?: string;
-  message?: string;
-  source_text?: string;
-  target_text?: string;
+  description?: string;
+  explanation?: string | null;
+  entity_type?: string | null;
+  canonical_key?: string | null;
+  field_name?: string | null;
+  expected_value?: unknown;
+  actual_value?: unknown;
+  detector_version?: string;
+  evidence?: FindingEvidence[];
 };
+
+export type FindingEvidence = {
+  side: "EXPECTED" | "ACTUAL" | "CONTEXT";
+  document_id?: string;
+  document_stage?: UploadStage | string;
+  document_name?: string;
+  page_number?: number;
+  quote?: string;
+  bbox?: unknown;
+  download_url?: string;
+  pdf_url?: string;
+  file_url?: string;
+  url?: string;
+};
+
+export type PageResult<T> = {
+  items: T[];
+  page: number;
+  page_size: number;
+  total: number;
+};
+
+export type ReviewDecision = "CONFIRMED" | "REJECTED" | "NEEDS_REVIEW" | "RESOLVED";
 
 declare global {
   interface Window {

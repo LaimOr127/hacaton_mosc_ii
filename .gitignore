@@ -5,6 +5,7 @@
 .DS_Store
 node_modules/
 dist/
+.venv/
 __pycache__/
 .pytest_cache/
 .ruff_cache/
@@ -14,6 +15,7 @@ __pycache__/
 data/
 backups/
 *.pdf
+!demo/fixtures/*.pdf
 *.log
 
 .omx/

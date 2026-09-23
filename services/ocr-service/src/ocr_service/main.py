@@ -29,6 +29,8 @@ class Settings(BaseModel):
     ocr_languages: str = Field(default_factory=lambda: env_str("OCR_LANGUAGES", "rus+eng"))
     ocr_dpi: int = Field(default_factory=lambda: env_int("OCR_DPI", 300))
     ocr_timeout_seconds: int = Field(default_factory=lambda: env_int("OCR_TIMEOUT_SECONDS", 120))
+    max_pdf_bytes: int = Field(default_factory=lambda: env_int("MAX_PDF_BYTES", 50 * 1024 * 1024))
+    max_pdf_pages: int = Field(default_factory=lambda: env_int("MAX_PDF_PAGES", 200))
     minio_endpoint: str = Field(default_factory=lambda: env_str("MINIO_ENDPOINT", "minio:9000"))
     minio_access_key: str = Field(default_factory=lambda: os.getenv("MINIO_ACCESS_KEY") or os.getenv("MINIO_ROOT_USER") or "")
     minio_secret_key: str = Field(default_factory=lambda: os.getenv("MINIO_SECRET_KEY") or os.getenv("MINIO_ROOT_PASSWORD") or "")
@@ -108,17 +110,27 @@ def minio_client() -> Minio:
 
 
 def load_object(bucket: str, storage_key: str) -> bytes:
-    response = minio_client().get_object(bucket, storage_key)
+    client = minio_client()
+    stat = client.stat_object(bucket, storage_key)
+    if stat.size is not None and stat.size > settings.max_pdf_bytes:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "PDF is too large")
+
+    response = client.get_object(bucket, storage_key)
     try:
-        return response.read()
+        data = response.read(settings.max_pdf_bytes + 1)
     finally:
         response.close()
         response.release_conn()
+    if len(data) > settings.max_pdf_bytes:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "PDF is too large")
+    return data
 
 
 def render_pdf_page(pdf_bytes: bytes, page_number: int, dpi: int) -> Image.Image:
     try:
         with fitz.open(stream=pdf_bytes, filetype="pdf") as document:
+            if document.page_count > settings.max_pdf_pages:
+                raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "PDF has too many pages")
             if page_number > document.page_count:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "page_number is out of range")
             page = document.load_page(page_number - 1)
@@ -138,28 +150,32 @@ def recognize_image(image: Image.Image, languages: str, timeout: int) -> tuple[s
         timeout=timeout,
     )
     width, height = image.size
-    parts: list[str] = []
-    blocks: list[OcrBlock] = []
+    lines: dict[tuple[int, int, int], list[tuple[str, float, int, int, int, int]]] = {}
     for index, text in enumerate(data.get("text", [])):
         text = text.strip()
         if not text:
             continue
-        confidence = float(data["conf"][index])
-        if confidence < 0:
-            confidence_value = None
-        else:
-            confidence_value = min(confidence / 100.0, 1.0)
+        key = (data["block_num"][index], data["par_num"][index], data["line_num"][index])
         x, y, w, h = data["left"][index], data["top"][index], data["width"][index], data["height"][index]
-        parts.append(text)
+        lines.setdefault(key, []).append((text, float(data["conf"][index]), x, y, x + w, y + h))
+
+    blocks: list[OcrBlock] = []
+    for words in lines.values():
+        positive_confidence = [word[1] for word in words if word[1] >= 0]
         blocks.append(
             OcrBlock(
                 order=len(blocks) + 1,
-                text=text,
-                bbox=BBox(x0=x / width, y0=y / height, x1=(x + w) / width, y1=(y + h) / height),
-                confidence=confidence_value,
+                text=" ".join(word[0] for word in words),
+                bbox=BBox(
+                    x0=min(word[2] for word in words) / width,
+                    y0=min(word[3] for word in words) / height,
+                    x1=max(word[4] for word in words) / width,
+                    y1=max(word[5] for word in words) / height,
+                ),
+                confidence=sum(positive_confidence) / (100 * len(positive_confidence)) if positive_confidence else None,
             )
         )
-    return " ".join(parts), blocks
+    return "\n".join(block.text for block in blocks), blocks
 
 
 @app.get("/health/live")

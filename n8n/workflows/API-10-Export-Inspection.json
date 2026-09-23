@@ -1,0 +1,24 @@
+{
+  "id": "api10ExportInspec1",
+  "name": "API-10 Export Inspection",
+  "nodes": [
+    {
+      "id": "baf4dbb2-f472-4b83-96a9-a240fa779aa4", "webhookId": "baf4dbb2-f472-4b83-96a9-a240fa779aa4",
+      "name": "Export inspection webhook", "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [0, 0],
+      "parameters": {"httpMethod": "GET", "path": "api/v1/inspections/:id/export", "responseMode": "responseNode", "options": {}}
+    },
+    {
+      "id": "dfd4d62d-cd6e-4acc-9022-1682256955a4", "name": "Build report",
+      "type": "n8n-nodes-base.postgres", "typeVersion": 2.6, "position": [220, 0],
+      "credentials": {"postgres": {"id": "appPostgresCred0001", "name": "Application PostgreSQL"}},
+      "parameters": {"resource": "database", "operation": "executeQuery", "query": "SELECT (SELECT jsonb_build_object('inspection',to_jsonb(i),'project',(SELECT to_jsonb(p) FROM projects p WHERE p.id=i.project_id),'documents',COALESCE((SELECT jsonb_agg(to_jsonb(d) ORDER BY d.stage,d.id) FROM (SELECT id,stage,original_filename,status,page_count,sha256 FROM documents WHERE project_id=i.project_id) d),'[]'::jsonb),'findings',COALESCE((SELECT jsonb_agg(to_jsonb(f) ORDER BY f.created_at,f.id) FROM (SELECT findings.*,COALESCE((SELECT jsonb_agg(jsonb_build_object('side',e.side,'document_id',e.document_id,'page_number',pg.page_number,'quote',e.quote,'bbox',e.bbox) ORDER BY e.side,e.id) FROM finding_evidence e JOIN document_pages pg ON pg.id=e.page_id WHERE e.finding_id=findings.id),'[]'::jsonb) AS evidence FROM findings WHERE inspection_id=i.id) f),'[]'::jsonb)) FROM inspections i WHERE i.id=$1::uuid) AS data", "options": {"queryReplacement": "={{ [$node['Export inspection webhook'].json.params.id] }}"}}
+    },
+    {
+      "id": "d4cb8ea7-7101-4a55-ac70-675300305661", "name": "Respond report",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1.4, "position": [440, 0],
+      "parameters": {"respondWith": "json", "responseBody": "={\"data\":{{ JSON.stringify($json.data) }},\"error\":null}", "options": {"responseCode": 200}}
+    }
+  ],
+  "connections": {"Export inspection webhook": {"main": [[{"node": "Build report", "type": "main", "index": 0}]]}, "Build report": {"main": [[{"node": "Respond report", "type": "main", "index": 0}]]}},
+  "pinData": {}, "active": true, "settings": {"executionOrder": "v1"}, "versionId": "1"
+}

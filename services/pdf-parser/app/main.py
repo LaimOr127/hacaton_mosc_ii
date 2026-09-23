@@ -1,25 +1,31 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import os
 import time
-from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import unquote, urlparse
 
 import anyio
 import fitz
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from minio import Minio
 from pydantic import BaseModel, Field
+from pydantic import ConfigDict, model_validator
 
 
 MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", "200"))
+MAX_PDF_BYTES = int(os.getenv("MAX_PDF_BYTES", str(50 * 1024 * 1024)))
 PDF_PARSE_TIMEOUT_SECONDS = float(os.getenv("PDF_PARSE_TIMEOUT_SECONDS", "15"))
 PDF_CONCURRENCY = int(os.getenv("PDF_CONCURRENCY", "2"))
 INTERNAL_API_TOKEN = os.getenv("INTERNAL_API_TOKEN", "")
 MIN_TEXT_CHARS_PER_PAGE = int(os.getenv("MIN_TEXT_CHARS_PER_PAGE", "20"))
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9000")
+MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY") or os.getenv("MINIO_ROOT_USER") or ""
+MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY") or os.getenv("MINIO_ROOT_PASSWORD") or ""
+MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
 
 _semaphore = asyncio.Semaphore(PDF_CONCURRENCY)
 
@@ -49,12 +55,18 @@ async def request_log(request: Request, call_next):
 
 
 class PdfRef(BaseModel):
-    bucket: str | None = None
-    storage_key: str | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    bucket: str = Field(min_length=1)
+    storage_key: str = Field(min_length=1)
     document_id: str
     correlation_id: str = Field(min_length=1)
-    local_path: str | None = None
-    file_url: str | None = None
+
+    @model_validator(mode="after")
+    def reject_path_like_storage_key(self) -> "PdfRef":
+        if "://" in self.storage_key or self.storage_key.startswith("/"):
+            raise ValueError("storage_key must be a MinIO object key")
+        return self
 
 
 class PageExtractRequest(PdfRef):
@@ -96,28 +108,37 @@ def _typed_error(code: str, message: str, http_status: int = status.HTTP_422_UNP
     return HTTPException(http_status, {"error": code, "message": message})
 
 
-def _resolve_pdf_path(ref: PdfRef) -> Path:
-    value = ref.local_path or ref.file_url or ref.storage_key
-    if not value:
-        raise _typed_error("PDF_SOURCE_REQUIRED", "Provide local_path or file_url for the test-mode parser")
-
-    if value.startswith("file://"):
-        parsed = urlparse(value)
-        if parsed.netloc not in {"", "localhost"}:
-            raise _typed_error("UNSUPPORTED_PDF_SOURCE", "Only local file URLs are supported")
-        value = unquote(parsed.path)
-    elif "://" in value:
-        raise _typed_error("UNSUPPORTED_PDF_SOURCE", "Only local paths and file:// URLs are supported")
-
-    path = Path(value)
-    if not path.is_file():
-        raise _typed_error("PDF_NOT_FOUND", "PDF file was not found", status.HTTP_404_NOT_FOUND)
-    return path
+def _minio_client() -> Minio:
+    if not MINIO_ACCESS_KEY or not MINIO_SECRET_KEY:
+        raise _typed_error("MINIO_NOT_CONFIGURED", "MinIO credentials are not configured", status.HTTP_503_SERVICE_UNAVAILABLE)
+    return Minio(
+        MINIO_ENDPOINT,
+        access_key=MINIO_ACCESS_KEY,
+        secret_key=MINIO_SECRET_KEY,
+        secure=MINIO_SECURE,
+    )
 
 
-def _open_pdf(path: Path) -> fitz.Document:
+def _load_pdf_bytes(ref: PdfRef) -> bytes:
+    client = _minio_client()
+    stat = client.stat_object(ref.bucket, ref.storage_key)
+    if stat.size is not None and stat.size > MAX_PDF_BYTES:
+        raise _typed_error("PDF_TOO_LARGE", f"PDF is larger than {MAX_PDF_BYTES} bytes", status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+
+    response = client.get_object(ref.bucket, ref.storage_key)
     try:
-        doc = fitz.open(path)
+        data = response.read(MAX_PDF_BYTES + 1)
+    finally:
+        response.close()
+        response.release_conn()
+    if len(data) > MAX_PDF_BYTES:
+        raise _typed_error("PDF_TOO_LARGE", f"PDF is larger than {MAX_PDF_BYTES} bytes", status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+    return data
+
+
+def _open_pdf(pdf_bytes: bytes) -> fitz.Document:
+    try:
+        doc = fitz.open(stream=io.BytesIO(pdf_bytes), filetype="pdf")
     except Exception as exc:
         raise _typed_error("INVALID_PDF", "PDF is invalid or corrupt") from exc
 
@@ -126,7 +147,7 @@ def _open_pdf(path: Path) -> fitz.Document:
         raise _typed_error("ENCRYPTED_PDF", "Encrypted PDF is not supported")
     if doc.page_count > MAX_PDF_PAGES:
         doc.close()
-        raise _typed_error("PDF_TOO_LARGE", f"PDF has more than {MAX_PDF_PAGES} pages")
+        raise _typed_error("PDF_TOO_LARGE", f"PDF has more than {MAX_PDF_PAGES} pages", status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
     return doc
 
 
@@ -151,8 +172,7 @@ def _page_summary(page: fitz.Page) -> dict[str, Any]:
 
 def _inspect_pdf(ref: PdfRef) -> dict[str, Any]:
     started = time.monotonic()
-    path = _resolve_pdf_path(ref)
-    doc = _open_pdf(path)
+    doc = _open_pdf(_load_pdf_bytes(ref))
     try:
         pages = []
         for page in doc:
@@ -181,8 +201,7 @@ def _normalized_bbox(rect: fitz.Rect, page: fitz.Page) -> BBox:
 
 def _extract_page(req: PageExtractRequest) -> dict[str, Any]:
     started = time.monotonic()
-    path = _resolve_pdf_path(req)
-    doc = _open_pdf(path)
+    doc = _open_pdf(_load_pdf_bytes(req))
     try:
         if req.page_number > doc.page_count:
             raise _typed_error("PAGE_NOT_FOUND", "Requested page does not exist", status.HTTP_404_NOT_FOUND)
@@ -194,19 +213,17 @@ def _extract_page(req: PageExtractRequest) -> dict[str, Any]:
             _deadline(started)
             if block.get("type") != 0:
                 continue
-            text = "\n".join(
-                "".join(span.get("text", "") for span in line.get("spans", [])).strip()
-                for line in block.get("lines", [])
-            ).strip()
-            if not text:
-                continue
-            blocks.append(
-                TextBlock(
-                    order=len(blocks) + 1,
-                    text=text,
-                    bbox=_normalized_bbox(fitz.Rect(block["bbox"]), page),
-                ).model_dump()
-            )
+            for line in block.get("lines", []):
+                text = "".join(span.get("text", "") for span in line.get("spans", [])).strip()
+                if not text:
+                    continue
+                blocks.append(
+                    TextBlock(
+                        order=len(blocks) + 1,
+                        text=text,
+                        bbox=_normalized_bbox(fitz.Rect(line["bbox"]), page),
+                    ).model_dump()
+                )
 
         return {
             "page_number": req.page_number,

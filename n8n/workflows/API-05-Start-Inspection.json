@@ -1,0 +1,59 @@
+{
+  "id": "api05StartInspect1",
+  "name": "API-05 Start Inspection",
+  "nodes": [
+    {
+      "id": "ddc1bd54-8cd3-496a-9061-352dbb8713a1",
+      "webhookId": "ddc1bd54-8cd3-496a-9061-352dbb8713a1",
+      "name": "Start inspection webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "parameters": {"httpMethod": "POST", "path": "api/v1/projects/:id/inspections", "responseMode": "responseNode", "options": {}}
+    },
+    {
+      "id": "a58a68a0-7250-425c-bb76-5ec3658cd416",
+      "name": "Create inspection",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [220, 0],
+      "credentials": {"postgres": {"id": "appPostgresCred0001", "name": "Application PostgreSQL"}},
+      "parameters": {
+        "resource": "database", "operation": "executeQuery",
+        "query": "WITH created AS (INSERT INTO inspections (project_id,status,current_stage,progress) SELECT p.id,'QUEUED','PARSING',0 FROM projects p WHERE p.id=$1::uuid AND (SELECT count(DISTINCT stage) FROM documents WHERE project_id=p.id AND status IN ('READY','PROCESSED'))=3 RETURNING id,project_id,status), job AS (INSERT INTO processing_jobs (inspection_id,job_type,status) SELECT id,'PROCESS_INSPECTION','QUEUED' FROM created) SELECT id,project_id,status FROM created",
+        "options": {"queryReplacement": "={{ [$node['Start inspection webhook'].json.params.id] }}"}
+      }
+    },
+    {
+      "id": "6bad725c-c981-492b-b962-7743a0d73571",
+      "name": "Dispatch processing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 0],
+      "parameters": {
+        "method": "POST", "url": "http://n8n-main:5678/webhook/internal/process-inspection",
+        "sendBody": true, "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({inspection_id:$json.id}) }}",
+        "options": {"timeout": 10000}
+      }
+    },
+    {
+      "id": "13d019c9-0c05-416d-9a59-730a8644d2e1",
+      "name": "Respond queued",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [660, 0],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"data\":{\"inspection_id\":{{ JSON.stringify($node['Create inspection'].json.id) }},\"status\":\"QUEUED\",\"status_url\":\"/api/v1/inspections/{{ $node['Create inspection'].json.id }}\"},\"error\":null}",
+        "options": {"responseCode": 202}
+      }
+    }
+  ],
+  "connections": {
+    "Start inspection webhook": {"main": [[{"node": "Create inspection", "type": "main", "index": 0}]]},
+    "Create inspection": {"main": [[{"node": "Dispatch processing", "type": "main", "index": 0}]]},
+    "Dispatch processing": {"main": [[{"node": "Respond queued", "type": "main", "index": 0}]]}
+  },
+  "pinData": {}, "active": true, "settings": {"executionOrder": "v1"}, "versionId": "1"
+}

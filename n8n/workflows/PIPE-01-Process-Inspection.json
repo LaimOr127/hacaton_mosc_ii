@@ -1,0 +1,62 @@
+{
+  "id": "pipe01Process0001",
+  "name": "PIPE-01 Process Inspection",
+  "nodes": [
+    {
+      "id": "1f8989cf-8e95-40c1-99f3-7d551992f8eb",
+      "webhookId": "1f8989cf-8e95-40c1-99f3-7d551992f8eb",
+      "name": "Internal inspection webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "parameters": {"httpMethod": "POST", "path": "internal/process-inspection", "responseMode": "onReceived", "options": {}}
+    },
+    {
+      "id": "54799caa-b18c-4f6c-9f8e-9e99d41aef80",
+      "name": "Load inspection documents",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [220, 0],
+      "credentials": {"postgres": {"id": "appPostgresCred0001", "name": "Application PostgreSQL"}},
+      "parameters": {
+        "resource": "database", "operation": "executeQuery",
+        "query": "WITH running AS (UPDATE inspections SET status='PROCESSING',current_stage='ANALYZING',progress=10,started_at=COALESCE(started_at,now()),updated_at=now() WHERE id=$1::uuid AND status IN ('QUEUED','PROCESSING') RETURNING id,project_id), jobs AS (UPDATE processing_jobs SET status='RUNNING',attempt=attempt+1,started_at=COALESCE(started_at,now()),heartbeat_at=now(),updated_at=now() WHERE inspection_id=$1::uuid AND job_type='PROCESS_INSPECTION' AND status IN ('QUEUED','RETRY_WAIT') RETURNING id) SELECT running.id::text AS inspection_id,COALESCE(jsonb_agg(jsonb_build_object('id',d.id,'stage',d.stage,'bucket',d.storage_bucket,'storage_key',d.storage_key)) FILTER (WHERE d.id IS NOT NULL),'[]'::jsonb) AS documents FROM running JOIN documents d ON d.project_id=running.project_id AND d.status IN ('READY','PROCESSED') GROUP BY running.id",
+        "options": {"queryReplacement": "={{ [$node['Internal inspection webhook'].json.body.inspection_id] }}"}
+      }
+    },
+    {
+      "id": "92db3516-d9dc-4647-9460-cd9f26d4adff",
+      "name": "Analyze PDFs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 0],
+      "credentials": {"httpHeaderAuth": {"id": "internalBearerCred01", "name": "Internal Bearer"}},
+      "parameters": {
+        "method": "POST", "url": "http://rules-engine:8000/v1/inspections/analyze",
+        "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
+        "sendBody": true, "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({inspection_id:$json.inspection_id,documents:$json.documents}) }}",
+        "options": {"timeout": 180000}
+      }
+    },
+    {
+      "id": "ba5a2d63-1078-462e-857e-d055711a6aa3",
+      "name": "Persist inspection",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [660, 0],
+      "credentials": {"postgres": {"id": "appPostgresCred0001", "name": "Application PostgreSQL"}},
+      "parameters": {
+        "resource": "database", "operation": "executeQuery",
+        "query": "SELECT persist_inspection_result($1::uuid,$2::jsonb) AS stats",
+        "options": {"queryReplacement": "={{ [$node['Load inspection documents'].json.inspection_id, JSON.stringify($json)] }}"}
+      }
+    }
+  ],
+  "connections": {
+    "Internal inspection webhook": {"main": [[{"node": "Load inspection documents", "type": "main", "index": 0}]]},
+    "Load inspection documents": {"main": [[{"node": "Analyze PDFs", "type": "main", "index": 0}]]},
+    "Analyze PDFs": {"main": [[{"node": "Persist inspection", "type": "main", "index": 0}]]}
+  },
+  "pinData": {}, "active": true, "settings": {"executionOrder": "v1"}, "versionId": "1"
+}

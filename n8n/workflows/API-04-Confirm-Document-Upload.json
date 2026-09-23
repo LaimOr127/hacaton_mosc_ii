@@ -1,0 +1,71 @@
+{
+  "id": "api04ConfirmDoc001",
+  "name": "API-04 Confirm Document Upload",
+  "nodes": [
+    {
+      "id": "d18b50f1-48ef-442b-9854-fbdaf7203c45",
+      "webhookId": "d18b50f1-48ef-442b-9854-fbdaf7203c45",
+      "name": "Confirm webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "parameters": {"httpMethod": "POST", "path": "api/v1/documents/:id/confirm", "responseMode": "responseNode", "options": {}}
+    },
+    {
+      "id": "3ad8117a-66f8-4d73-a10e-f695ceda0cf5",
+      "name": "Select document",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [220, 0],
+      "credentials": {"postgres": {"id": "appPostgresCred0001", "name": "Application PostgreSQL"}},
+      "parameters": {
+        "resource": "database", "operation": "executeQuery",
+        "query": "SELECT id AS document_id,storage_bucket,storage_key,size_bytes,status FROM documents WHERE id=$1::uuid AND status='UPLOADING'",
+        "options": {"queryReplacement": "={{ [$node['Confirm webhook'].json.params.id] }}"}
+      }
+    },
+    {
+      "id": "ba03e8d3-f927-4f14-81d6-92ef407cbe86",
+      "name": "Verify object",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 0],
+      "credentials": {"httpHeaderAuth": {"id": "internalBearerCred01", "name": "Internal Bearer"}},
+      "parameters": {
+        "method": "POST", "url": "http://storage-api:8000/v1/objects/confirm",
+        "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
+        "sendBody": true, "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({bucket:$json.storage_bucket,key:$json.storage_key}) }}",
+        "options": {"timeout": 30000}
+      }
+    },
+    {
+      "id": "26598aae-630d-4ea8-8c5a-742e5fcbf83b",
+      "name": "Mark document ready",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [660, 0],
+      "credentials": {"postgres": {"id": "appPostgresCred0001", "name": "Application PostgreSQL"}},
+      "parameters": {
+        "resource": "database", "operation": "executeQuery",
+        "query": "UPDATE documents SET status='READY',sha256=$2,updated_at=now() WHERE id=$1::uuid AND status='UPLOADING' AND size_bytes=$3 AND $4=true RETURNING id,project_id,stage,status,sha256,page_count,created_at,updated_at",
+        "options": {"queryReplacement": "={{ [$node['Select document'].json.document_id, $json.sha256, $json.size_bytes, $json.is_pdf] }}"}
+      }
+    },
+    {
+      "id": "7f4f9804-530a-496e-bf7d-f0fd39129560",
+      "name": "Respond confirmed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [880, 0],
+      "parameters": {"respondWith": "json", "responseBody": "={\"data\":{{ JSON.stringify($json) }},\"error\":null}", "options": {"responseCode": 200}}
+    }
+  ],
+  "connections": {
+    "Confirm webhook": {"main": [[{"node": "Select document", "type": "main", "index": 0}]]},
+    "Select document": {"main": [[{"node": "Verify object", "type": "main", "index": 0}]]},
+    "Verify object": {"main": [[{"node": "Mark document ready", "type": "main", "index": 0}]]},
+    "Mark document ready": {"main": [[{"node": "Respond confirmed", "type": "main", "index": 0}]]}
+  },
+  "pinData": {}, "active": true, "settings": {"executionOrder": "v1"}, "versionId": "1"
+}

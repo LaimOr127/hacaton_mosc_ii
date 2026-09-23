@@ -1,0 +1,35 @@
+{
+  "id": "api06GetInspect01",
+  "name": "API-06 Get Inspection",
+  "nodes": [
+    {
+      "id": "a32f8bc3-8a03-457e-9ccb-0847bda113c5",
+      "webhookId": "a32f8bc3-8a03-457e-9ccb-0847bda113c5",
+      "name": "Get inspection webhook",
+      "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [0, 0],
+      "parameters": {"httpMethod": "GET", "path": "api/v1/inspections/:id", "responseMode": "responseNode", "options": {}}
+    },
+    {
+      "id": "80efc4be-3df4-4827-9348-f5e0c6007f42",
+      "name": "Select inspection",
+      "type": "n8n-nodes-base.postgres", "typeVersion": 2.6, "position": [220, 0],
+      "credentials": {"postgres": {"id": "appPostgresCred0001", "name": "Application PostgreSQL"}},
+      "parameters": {
+        "resource": "database", "operation": "executeQuery",
+        "query": "SELECT id,project_id,status,current_stage,progress,stats,started_at,finished_at,created_at,updated_at FROM inspections WHERE id=$1::uuid",
+        "options": {"queryReplacement": "={{ [$node['Get inspection webhook'].json.params.id] }}"}
+      }
+    },
+    {
+      "id": "15f90369-754a-4e70-9ead-004c974e6a4a",
+      "name": "Respond inspection",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1.4, "position": [440, 0],
+      "parameters": {"respondWith": "json", "responseBody": "={\"data\":{{ JSON.stringify($json) }},\"error\":null}", "options": {"responseCode": 200}}
+    }
+  ],
+  "connections": {
+    "Get inspection webhook": {"main": [[{"node": "Select inspection", "type": "main", "index": 0}]]},
+    "Select inspection": {"main": [[{"node": "Respond inspection", "type": "main", "index": 0}]]}
+  },
+  "pinData": {}, "active": true, "settings": {"executionOrder": "v1"}, "versionId": "1"
+}

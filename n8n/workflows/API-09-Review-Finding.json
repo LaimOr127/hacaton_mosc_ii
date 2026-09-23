@@ -1,0 +1,35 @@
+{
+  "id": "api09ReviewFind01",
+  "name": "API-09 Review Finding",
+  "nodes": [
+    {
+      "id": "d2239f62-c1b8-449f-9353-73d3b8a4c236",
+      "webhookId": "d2239f62-c1b8-449f-9353-73d3b8a4c236",
+      "name": "Review webhook",
+      "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [0, 0],
+      "parameters": {"httpMethod": "POST", "path": "api/v1/findings/:id/reviews", "responseMode": "responseNode", "options": {}}
+    },
+    {
+      "id": "fd70d0f4-b85d-420d-81ae-e929581f473d",
+      "name": "Save review",
+      "type": "n8n-nodes-base.postgres", "typeVersion": 2.6, "position": [220, 0],
+      "credentials": {"postgres": {"id": "appPostgresCred0001", "name": "Application PostgreSQL"}},
+      "parameters": {
+        "resource": "database", "operation": "executeQuery",
+        "query": "WITH candidate AS (SELECT id FROM findings WHERE id=$1::uuid AND $2 IN ('CONFIRMED','REJECTED','NEEDS_REVIEW','RESOLVED')), inserted AS (INSERT INTO reviews (finding_id,decision,comment,reviewer_id) SELECT id,$2,$3,'demo-user' FROM candidate RETURNING id,finding_id,decision,comment,created_at), changed AS (UPDATE findings SET status=$2,updated_at=now() WHERE id IN (SELECT finding_id FROM inserted) RETURNING id,status), audit AS (INSERT INTO audit_events (actor_type,actor_id,action,resource_type,resource_id,payload) SELECT 'USER','demo-user','FINDING_REVIEWED','finding',finding_id::text,jsonb_build_object('decision',decision) FROM inserted) SELECT inserted.id,inserted.finding_id,inserted.decision,inserted.comment,inserted.created_at,changed.status FROM inserted JOIN changed ON changed.id=inserted.finding_id",
+        "options": {"queryReplacement": "={{ [$node['Review webhook'].json.params.id, $node['Review webhook'].json.body.decision, $node['Review webhook'].json.body.comment || null] }}"}
+      }
+    },
+    {
+      "id": "7f4096e2-3d5c-4f86-9f59-2013910e326f",
+      "name": "Respond review",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1.4, "position": [440, 0],
+      "parameters": {"respondWith": "json", "responseBody": "={\"data\":{{ JSON.stringify($json) }},\"error\":null}", "options": {"responseCode": 201}}
+    }
+  ],
+  "connections": {
+    "Review webhook": {"main": [[{"node": "Save review", "type": "main", "index": 0}]]},
+    "Save review": {"main": [[{"node": "Respond review", "type": "main", "index": 0}]]}
+  },
+  "pinData": {}, "active": true, "settings": {"executionOrder": "v1"}, "versionId": "1"
+}

@@ -1,0 +1,75 @@
+{
+  "project_name": "Demo construction inspection",
+  "documents": [
+    {
+      "stage": "PROJECT",
+      "filename": "project.pdf",
+      "path": "fixtures/project.pdf",
+      "content_type": "application/pdf",
+      "sha256": "86c1d9a97895c51f5b08e80d0d2e5c3f69ce2dcd5b28e656e1254f850e3958e8",
+      "scan_like": false,
+      "expected_pages": 1
+    },
+    {
+      "stage": "WORKING",
+      "filename": "working.pdf",
+      "path": "fixtures/working.pdf",
+      "content_type": "application/pdf",
+      "sha256": "66fdb9b6c22348dcc499dfa8565f6010f26433a144dfcb52d8bacacfe1f8d914",
+      "scan_like": false,
+      "expected_pages": 1
+    },
+    {
+      "stage": "AS_BUILT",
+      "filename": "as_built_scan_like.pdf",
+      "path": "fixtures/as_built_scan_like.pdf",
+      "content_type": "application/pdf",
+      "sha256": "da8ef03c9b5bb7c1660af6902916e5f3743deaf89295073252dc84e9996070fc",
+      "scan_like": true,
+      "expected_pages": 1
+    }
+  ],
+  "expected_stats": {
+    "documents": 3,
+    "pages": 3,
+    "findings_min": 4
+  },
+  "expected_findings": [
+    {
+      "finding_type": "VALUE_CHANGED",
+      "entity_type": "WALL",
+      "field_name": "thickness_mm",
+      "expected_value": 200,
+      "actual_value": 150,
+      "expected_quote": "Wall S-1: aerated concrete, thickness 200 mm",
+      "actual_quote": "Wall S-1: aerated concrete, thickness 150 mm"
+    },
+    {
+      "finding_type": "VALUE_CHANGED",
+      "entity_type": "DOOR",
+      "field_name": "width_mm",
+      "expected_value": 900,
+      "actual_value": 800,
+      "expected_quote": "Door D-14: 900 x 2100 mm",
+      "actual_quote": "Door D-14: 800 x 2100 mm"
+    },
+    {
+      "finding_type": "COUNT_CHANGED",
+      "entity_type": "WINDOW",
+      "field_name": "count",
+      "expected_value": 2,
+      "actual_value": 1,
+      "expected_quote": "Window OK-2: 1200 x 1500 mm, quantity 2",
+      "actual_quote": "Window OK-2: quantity 1"
+    },
+    {
+      "finding_type": "EXTRA_ENTITY",
+      "entity_type": "DOOR",
+      "field_name": "entity",
+      "expected_value": null,
+      "actual_value": "Д-99",
+      "expected_quote": null,
+      "actual_quote": "Extra door D-99"
+    }
+  ]
+}

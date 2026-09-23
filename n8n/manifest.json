@@ -1,6 +1,19 @@
 {
   "version": 1,
   "workflows": [
-    {"file": "API-12-Health-Summary.json", "public": true}
+    {"file": "API-01-Create-Project.json", "public": true},
+    {"file": "API-02-List-Projects.json", "public": true},
+    {"file": "API-02-Get-Project.json", "public": true},
+    {"file": "API-03-Create-Document-Upload.json", "public": true},
+    {"file": "API-04-Confirm-Document-Upload.json", "public": true},
+    {"file": "API-05-Start-Inspection.json", "public": true},
+    {"file": "API-06-Get-Inspection.json", "public": true},
+    {"file": "API-07-List-Findings.json", "public": true},
+    {"file": "API-08-Get-Finding.json", "public": true},
+    {"file": "API-09-Review-Finding.json", "public": true},
+    {"file": "API-10-Export-Inspection.json", "public": true},
+    {"file": "API-11-Get-Document-Download-URL.json", "public": true},
+    {"file": "API-12-Health-Summary.json", "public": true},
+    {"file": "PIPE-01-Process-Inspection.json", "public": false}
   ]
 }

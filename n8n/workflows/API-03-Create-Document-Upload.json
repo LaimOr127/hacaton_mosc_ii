@@ -1,0 +1,75 @@
+{
+  "id": "api03DocUpload001",
+  "name": "API-03 Create Document Upload",
+  "nodes": [
+    {
+      "id": "85ba4c5d-cf1f-4fd7-a5d1-978dcbe08be4",
+      "webhookId": "85ba4c5d-cf1f-4fd7-a5d1-978dcbe08be4",
+      "name": "Upload webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/projects/:id/documents/uploads",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "f99f1f54-c9aa-43bc-86bf-0c76f7aae337",
+      "name": "Insert document",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [220, 0],
+      "credentials": {"postgres": {"id": "appPostgresCred0001", "name": "Application PostgreSQL"}},
+      "parameters": {
+        "resource": "database",
+        "operation": "executeQuery",
+        "query": "WITH new_id AS (SELECT gen_random_uuid() AS id), inserted AS (INSERT INTO documents (id,project_id,stage,original_filename,content_type,size_bytes,storage_bucket,storage_key,status) SELECT new_id.id,$1::uuid,$2,$3,$4,$5,$6,'projects/' || $1 || '/' || $2 || '/' || new_id.id || '/original.pdf','UPLOADING' FROM new_id WHERE EXISTS (SELECT 1 FROM projects WHERE id=$1::uuid) AND $2 IN ('PROJECT','WORKING','AS_BUILT') AND $4='application/pdf' AND $5 BETWEEN 1 AND 52428800 RETURNING id,storage_bucket,storage_key) SELECT id AS document_id,storage_bucket,storage_key FROM inserted",
+        "options": {
+          "queryReplacement": "={{ [$node['Upload webhook'].json.params.id, $node['Upload webhook'].json.body.stage, $node['Upload webhook'].json.body.filename, $node['Upload webhook'].json.body.content_type, $node['Upload webhook'].json.body.size_bytes, 'documents'] }}"
+        }
+      }
+    },
+    {
+      "id": "d8970628-536a-4ecb-93f4-65fd2dcc6cee",
+      "name": "Presign PUT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 0],
+      "credentials": {"httpHeaderAuth": {"id": "internalBearerCred01", "name": "Internal Bearer"}},
+      "parameters": {
+        "method": "POST",
+        "url": "http://storage-api:8000/v1/objects/presign-put",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({bucket:$json.storage_bucket,key:$json.storage_key,content_type:'application/pdf'}) }}",
+        "options": {"timeout": 10000}
+      }
+    },
+    {
+      "id": "e438ba1e-5b85-47d6-ac2f-0db898994512",
+      "name": "Respond upload ticket",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [660, 0],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"data\":{\"document_id\":{{ JSON.stringify($node['Insert document'].json.document_id) }},\"upload_url\":{{ JSON.stringify($json.url) }},\"method\":\"PUT\",\"required_headers\":{\"Content-Type\":\"application/pdf\"}},\"error\":null}",
+        "options": {"responseCode": 201}
+      }
+    }
+  ],
+  "connections": {
+    "Upload webhook": {"main": [[{"node": "Insert document", "type": "main", "index": 0}]]},
+    "Insert document": {"main": [[{"node": "Presign PUT", "type": "main", "index": 0}]]},
+    "Presign PUT": {"main": [[{"node": "Respond upload ticket", "type": "main", "index": 0}]]}
+  },
+  "pinData": {},
+  "active": true,
+  "settings": {"executionOrder": "v1"},
+  "versionId": "1"
+}

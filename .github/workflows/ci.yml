@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose and shell scripts
+        run: |
+          docker compose --env-file .env.example config --quiet
+          sh -n scripts/*.sh db/init/*.sh db/migrations/*.sh n8n/bootstrap.sh
+      - name: Validate n8n workflow manifest
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const manifest = JSON.parse(fs.readFileSync('n8n/manifest.json', 'utf8'));
+          if (!Array.isArray(manifest.workflows) || manifest.workflows.length === 0) {
+            throw new Error('n8n/manifest.json must list workflows');
+          }
+          for (const item of manifest.workflows) {
+            const file = `n8n/workflows/${item.file}`;
+            const workflow = JSON.parse(fs.readFileSync(file, 'utf8'));
+            if (!workflow.name || !Array.isArray(workflow.nodes) || workflow.nodes.length === 0) {
+              throw new Error(`${file} is not an importable workflow`);
+            }
+            if (item.public !== true) continue;
+            if (workflow.active !== true) {
+              throw new Error(`${file} is marked public but is not active`);
+            }
+          }
+          NODE
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build frontend
+        run: npm ci --prefix frontend && npm run build --prefix frontend
+      - name: Build and test thin services
+        run: |
+          docker compose --env-file .env.example build storage-api pdf-parser ocr-service rules-engine
+          docker compose --env-file .env.example --profile test run --build --rm --no-deps storage-api-test
+          docker compose --env-file .env.example run --rm --no-deps pdf-parser pytest
+          docker compose --env-file .env.example run --rm --no-deps ocr-service pytest
+          docker compose --env-file .env.example run --rm --no-deps rules-engine pytest
+      - name: Start complete stack
+        run: |
+          ./scripts/generate-secrets.sh
+          docker compose up -d --build
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent http://localhost/api/v1/health >/dev/null; then exit 0; fi
+            sleep 2
+          done
+          docker compose ps
+          exit 1
+      - name: Run public API and persistence E2E
+        run: ./scripts/e2e-demo.sh
+      - name: Capture stack logs on failure
+        if: failure()
+        run: docker compose logs --tail=200
+      - name: Stop stack
+        if: always()
+        run: docker compose down

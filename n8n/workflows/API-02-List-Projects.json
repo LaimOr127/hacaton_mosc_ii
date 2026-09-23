@@ -1,0 +1,24 @@
+{
+  "id": "api02ListProject1",
+  "name": "API-02 List Projects",
+  "nodes": [
+    {
+      "id": "75303e6f-52b3-40a7-b3f9-6a66c09ebf02", "webhookId": "75303e6f-52b3-40a7-b3f9-6a66c09ebf02",
+      "name": "List projects webhook", "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [0, 0],
+      "parameters": {"httpMethod": "GET", "path": "api/v1/projects", "responseMode": "responseNode", "options": {}}
+    },
+    {
+      "id": "791e5da2-3991-4635-b54c-ebf516734e92", "name": "Select projects",
+      "type": "n8n-nodes-base.postgres", "typeVersion": 2.6, "position": [220, 0],
+      "credentials": {"postgres": {"id": "appPostgresCred0001", "name": "Application PostgreSQL"}},
+      "parameters": {"resource": "database", "operation": "executeQuery", "query": "SELECT COALESCE(jsonb_agg(to_jsonb(p) ORDER BY p.created_at DESC,p.id DESC),'[]'::jsonb) AS data FROM (SELECT id,name,description,status,created_at,updated_at FROM projects ORDER BY created_at DESC,id DESC LIMIT 100) p", "options": {}}
+    },
+    {
+      "id": "73f67c79-99b5-42c2-97f1-c662e72cf506", "name": "Respond projects",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1.4, "position": [440, 0],
+      "parameters": {"respondWith": "json", "responseBody": "={\"data\":{{ JSON.stringify($json.data) }},\"error\":null}", "options": {"responseCode": 200}}
+    }
+  ],
+  "connections": {"List projects webhook": {"main": [[{"node": "Select projects", "type": "main", "index": 0}]]}, "Select projects": {"main": [[{"node": "Respond projects", "type": "main", "index": 0}]]}},
+  "pinData": {}, "active": true, "settings": {"executionOrder": "v1"}, "versionId": "1"
+}

@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help doctor secrets build up migrate health test verify logs down
+.PHONY: help doctor secrets build up migrate health test e2e verify logs down
 help:
 	@grep -E '^[a-z-]+:.*#' $(MAKEFILE_LIST)
 
@@ -23,9 +23,15 @@ health: # show service health
 	@docker compose ps
 
 test: # run service unit tests
-	@docker compose run --rm pdf-parser pytest && docker compose run --rm ocr-service pytest
+	@docker compose --profile test run --build --rm --no-deps storage-api-test
+	@docker compose run --rm --no-deps pdf-parser pytest
+	@docker compose run --rm --no-deps ocr-service pytest
+	@docker compose run --rm --no-deps rules-engine pytest
 
-verify: doctor build up health test # basic non-destructive verification
+e2e: # exercise upload, OCR, findings, review and restart persistence
+	@./scripts/e2e-demo.sh
+
+verify: doctor build up health test e2e # full non-destructive verification
 
 logs: # follow stack logs
 	@docker compose logs -f

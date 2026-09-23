@@ -1,0 +1,61 @@
+{
+  "id": "api01CreateProj001",
+  "name": "API-01 Create Project",
+  "nodes": [
+    {
+      "id": "118c9c93-8ac9-4b10-b74f-3d063664c0e0",
+      "webhookId": "118c9c93-8ac9-4b10-b74f-3d063664c0e0",
+      "name": "Create Project webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/projects",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "82e66cd0-ecbd-461a-bb68-294138cffb28",
+      "name": "Insert project",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [220, 0],
+      "credentials": {
+        "postgres": {
+          "id": "appPostgresCred0001",
+          "name": "Application PostgreSQL"
+        }
+      },
+      "parameters": {
+        "resource": "database",
+        "operation": "executeQuery",
+        "query": "INSERT INTO projects (name, description) VALUES ($1, $2) RETURNING id, name, description, status, created_at, updated_at",
+        "options": {
+          "queryReplacement": "={{ [$node['Create Project webhook'].json.body.name, $node['Create Project webhook'].json.body.description || null] }}"
+        }
+      }
+    },
+    {
+      "id": "5a657f0c-6209-4c68-b8e8-aae6818cd8cf",
+      "name": "Respond created",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [440, 0],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"data\":{{ JSON.stringify($json) }},\"error\":null}",
+        "options": {"responseCode": 201}
+      }
+    }
+  ],
+  "connections": {
+    "Create Project webhook": {"main": [[{"node": "Insert project", "type": "main", "index": 0}]]},
+    "Insert project": {"main": [[{"node": "Respond created", "type": "main", "index": 0}]]}
+  },
+  "pinData": {},
+  "active": true,
+  "settings": {"executionOrder": "v1"},
+  "versionId": "1"
+}

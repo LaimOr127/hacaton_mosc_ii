@@ -21,8 +21,20 @@ x-n8n-env: &n8n-env
   WEBHOOK_URL: ${APP_BASE_URL}/
   N8N_EDITOR_BASE_URL: ${APP_BASE_URL}/n8n/
   N8N_PROXY_HOPS: 1
+  OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS: "true"
   EXECUTIONS_DATA_PRUNE: "true"
   EXECUTIONS_DATA_MAX_AGE: 168
+  APP_DB_HOST: postgres
+  APP_DB_PORT: 5432
+  APP_DB_NAME: ${APP_DB_NAME}
+  APP_DB_USER: ${APP_DB_USER}
+  APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+  INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+  STORAGE_API_URL: http://storage-api:8000
+  PDF_PARSER_URL: http://pdf-parser:8000
+  OCR_SERVICE_URL: http://ocr-service:8000
+  RULES_ENGINE_URL: http://rules-engine:8000
+  MINIO_BUCKET_DOCUMENTS: ${MINIO_BUCKET_DOCUMENTS}
 
 services:
   postgres:
@@ -93,8 +105,36 @@ services:
     networks: [internal]
     restart: "no"
 
+  storage-api:
+    build:
+      context: ./services/storage-api
+      target: base
+    depends_on:
+      minio: {condition: service_healthy}
+    environment:
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      PUBLIC_STORAGE_BASE_URL: ${APP_BASE_URL}/storage
+      PRESIGNED_URL_TTL_SECONDS: ${PRESIGNED_URL_TTL_SECONDS}
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready')\""]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  storage-api-test:
+    profiles: [test]
+    build:
+      context: ./services/storage-api
+      target: test
+    networks: [internal]
+
   db-migrate:
-    image: postgres:17.4-alpine
+    build: ./db/migrations
     depends_on:
       postgres: {condition: service_healthy}
     environment:
@@ -103,8 +143,9 @@ services:
       PGUSER: ${POSTGRES_SUPERUSER}
       PGPASSWORD: ${POSTGRES_SUPERUSER_PASSWORD}
       APP_DB_NAME: ${APP_DB_NAME}
+      APP_DB_USER: ${APP_DB_USER}
+      APP_DB_READONLY_USER: ${APP_DB_READONLY_USER}
     entrypoint: ["/bin/sh", "/migrations/migrate.sh"]
-    volumes: [./db/migrations:/migrations:ro]
     networks: [internal]
     restart: "no"
 
@@ -113,6 +154,9 @@ services:
     environment:
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
       MAX_PDF_PAGES: ${MAX_PDF_PAGES}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     networks: [internal]
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready')\""]
@@ -128,6 +172,9 @@ services:
       OCR_LANGUAGES: ${OCR_LANGUAGES}
       OCR_DPI: ${OCR_DPI}
       OCR_TIMEOUT_SECONDS: ${OCR_TIMEOUT_SECONDS}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     networks: [internal]
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8000/health/ready"]
@@ -136,13 +183,28 @@ services:
       retries: 10
     restart: unless-stopped
 
+  rules-engine:
+    build: ./services/rules-engine
+    environment:
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+      PDF_PARSER_URL: http://pdf-parser:8000
+      OCR_SERVICE_URL: http://ocr-service:8000
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready')\""]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
   n8n-main:
-    image: n8nio/n8n:2.6.4
+    image: n8nio/n8n:2.40.5
     command: start
     environment: *n8n-env
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
+      n8n-bootstrap: {condition: service_completed_successfully, restart: true}
     volumes: [n8n_data:/home/node/.n8n]
     networks: [edge, internal]
     healthcheck:
@@ -153,7 +215,7 @@ services:
     restart: unless-stopped
 
   n8n-worker:
-    image: n8nio/n8n:2.6.4
+    image: n8nio/n8n:2.40.5
     command: worker --concurrency=5
     environment: *n8n-env
     depends_on:
@@ -164,15 +226,15 @@ services:
     restart: unless-stopped
 
   n8n-bootstrap:
-    image: n8nio/n8n:2.6.4
+    build:
+      context: ./n8n
+      dockerfile: bootstrap.Dockerfile
     depends_on:
-      n8n-main: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      db-migrate: {condition: service_completed_successfully}
     environment: *n8n-env
     entrypoint: ["/bin/sh", "/bootstrap/bootstrap.sh"]
-    volumes:
-      - ./n8n/workflows:/workflows:ro
-      - ./n8n/bootstrap.sh:/bootstrap/bootstrap.sh:ro
-      - n8n_data:/data
     networks: [internal]
     restart: "no"
 
@@ -185,10 +247,11 @@ services:
     image: nginx:1.27.4-alpine
     depends_on:
       frontend: {condition: service_started}
+      minio: {condition: service_healthy}
       n8n-main: {condition: service_healthy}
     ports: ["127.0.0.1:80:80"]
     volumes: [./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro]
-    networks: [edge]
+    networks: [edge, internal]
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null"]
       interval: 10s

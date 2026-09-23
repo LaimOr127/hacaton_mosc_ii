@@ -7,7 +7,9 @@ import {
   type Finding,
   type Inspection,
   type InspectionStart,
+  type PageResult,
   type Project,
+  type ReviewDecision,
   type UploadStage,
   type UploadTicket,
 } from "./api";
@@ -45,8 +47,10 @@ export default function App() {
   });
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [findings, setFindings] = useState<Finding[]>([]);
+  const [findingsPage, setFindingsPage] = useState({ page: 1, page_size: 20, total: 0 });
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
-  const [filters, setFilters] = useState({ severity: "", status: "", type: "" });
+  const [reviewComment, setReviewComment] = useState("");
+  const [filters, setFilters] = useState({ severity: "", status: "", finding_type: "" });
   const pollingAbort = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -67,6 +71,19 @@ export default function App() {
     }
   }
 
+  function selectProject(project: Project) {
+    pollingAbort.current?.abort();
+    setSelectedProject(project);
+    setInspection(null);
+    setFindings([]);
+    setSelectedFinding(null);
+    setUploads({
+      PROJECT: { progress: 0, status: "idle" },
+      WORKING: { progress: 0, status: "idle" },
+      AS_BUILT: { progress: 0, status: "idle" },
+    });
+  }
+
   async function createProject(event: FormEvent) {
     event.preventDefault();
     setApiError(null);
@@ -77,7 +94,7 @@ export default function App() {
         body: JSON.stringify({ name: projectName.trim() }),
       });
       setProjects((current) => [project, ...current.filter((item) => item.id !== project.id)]);
-      setSelectedProject(project);
+      selectProject(project);
       setProjectName("");
     } catch (error) {
       setApiError(publicError(error));
@@ -118,6 +135,7 @@ export default function App() {
     if (!selectedProject) return;
     setApiError(null);
     setNotice(null);
+    pollingAbort.current?.abort();
     try {
       const started = await apiRequest<InspectionStart>(`/projects/${selectedProject.id}/inspections`, {
         method: "POST",
@@ -131,42 +149,78 @@ export default function App() {
   }
 
   async function pollInspection(inspectionId: string) {
-    pollingAbort.current?.abort();
     const controller = new AbortController();
     pollingAbort.current = controller;
     let delay = 1000;
-    while (!controller.signal.aborted) {
-      const current = await apiRequest<Inspection>(`/inspections/${inspectionId}`, undefined, controller.signal);
-      setInspection(current);
-      if (["COMPLETED", "COMPLETED_WITH_WARNINGS", "FAILED"].includes(current.status)) {
-        if (current.status !== "FAILED") await loadFindings(current.id);
-        return;
+    try {
+      while (!controller.signal.aborted) {
+        const current = await apiRequest<Inspection>(`/inspections/${inspectionId}`, undefined, controller.signal);
+        setInspection(current);
+        if (["COMPLETED", "COMPLETED_WITH_WARNINGS", "FAILED"].includes(current.status)) {
+          if (current.status !== "FAILED") await loadFindings(current.id);
+          return;
+        }
+        await cancellableDelay(delay, controller.signal);
+        delay = Math.min(delay * 1.5, 8000);
       }
-      await new Promise((resolve) => setTimeout(resolve, delay));
-      delay = Math.min(delay * 1.5, 8000);
+    } catch (error) {
+      if (!controller.signal.aborted) setApiError(publicError(error));
+    } finally {
+      if (pollingAbort.current === controller) pollingAbort.current = null;
     }
   }
 
   async function loadFindings(inspectionId: string) {
     try {
-      const data = await apiRequest<Finding[]>(`/inspections/${inspectionId}/findings`);
-      setFindings(data);
-      setSelectedFinding(data[0] || null);
+      const query = new URLSearchParams({ page: "1", page_size: "20" });
+      for (const [key, value] of Object.entries(filters)) {
+        if (value) query.set(key, value);
+      }
+      const data = await apiRequest<PageResult<Finding>>(`/inspections/${inspectionId}/findings?${query}`);
+      setFindings(data.items);
+      setFindingsPage({ page: data.page, page_size: data.page_size, total: data.total });
+      if (data.items[0]) await loadFindingDetail(data.items[0].id);
+      else setSelectedFinding(null);
     } catch (error) {
       setApiError(publicError(error));
     }
   }
 
-  async function reviewFinding(status: "CONFIRMED" | "REJECTED" | "NEEDS_REVIEW") {
+  async function loadFindingDetail(findingId: string) {
+    try {
+      const detail = await apiRequest<Finding>(`/findings/${findingId}`);
+      setSelectedFinding(detail);
+      setFindings((current) => current.map((finding) => (finding.id === detail.id ? { ...finding, ...detail } : finding)));
+      setReviewComment("");
+    } catch (error) {
+      setApiError(publicError(error));
+    }
+  }
+
+  async function reviewFinding(decision: ReviewDecision) {
     if (!selectedFinding) return;
     try {
-      const updated = await apiRequest<Finding>(`/findings/${selectedFinding.id}/reviews`, {
+      await apiRequest<unknown>(`/findings/${selectedFinding.id}/reviews`, {
         method: "POST",
         headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({ decision, comment: reviewComment.trim() || undefined }),
       });
-      setSelectedFinding(updated);
-      setFindings((current) => current.map((finding) => (finding.id === updated.id ? updated : finding)));
+      await loadFindingDetail(selectedFinding.id);
+    } catch (error) {
+      setApiError(publicError(error));
+    }
+  }
+
+  async function exportInspection() {
+    if (!inspection) return;
+    try {
+      const report = await apiRequest<unknown>(`/inspections/${inspection.id}/export`);
+      const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `inspection-${inspection.id}.json`;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (error) {
       setApiError(publicError(error));
     }
@@ -178,7 +232,7 @@ export default function App() {
         (finding) =>
           (!filters.severity || finding.severity === filters.severity) &&
           (!filters.status || finding.status === filters.status) &&
-          (!filters.type || finding.type === filters.type),
+          (!filters.finding_type || finding.finding_type === filters.finding_type),
       ),
     [findings, filters],
   );
@@ -218,7 +272,7 @@ export default function App() {
           {!loadingProjects && projects.length === 0 && <p className="muted">No projects from public API yet.</p>}
           <div className="list">
             {projects.map((project) => (
-              <button key={project.id} className="list-item" type="button" onClick={() => setSelectedProject(project)}>
+              <button key={project.id} className="list-item" type="button" onClick={() => selectProject(project)}>
                 <strong>{project.name}</strong>
                 <span>{project.id}</span>
               </button>
@@ -262,7 +316,7 @@ export default function App() {
                   type="button"
                   className="ghost"
                   disabled={!inspection}
-                  onClick={() => inspection && window.open(`${apiBaseUrl()}/inspections/${inspection.id}/export`, "_blank", "noopener,noreferrer")}
+                  onClick={exportInspection}
                 >
                   Export
                 </button>
@@ -289,13 +343,19 @@ export default function App() {
         <section className="panel wide">
           <h2>Findings</h2>
           <div className="filters">
-            {(["severity", "status", "type"] as const).map((field) => (
+            {(["severity", "status", "finding_type"] as const).map((field) => (
               <label key={field}>
                 {field}
                 <input value={filters[field]} onChange={(event) => setFilters((current) => ({ ...current, [field]: event.target.value }))} />
               </label>
             ))}
+            <button type="button" className="ghost" disabled={!inspection} onClick={() => inspection && loadFindings(inspection.id)}>
+              Apply
+            </button>
           </div>
+          <p className="muted">
+            Page {findingsPage.page}, {filteredFindings.length} of {findingsPage.total}
+          </p>
           {filteredFindings.length === 0 && <p className="muted">No findings returned by API.</p>}
           <table>
             <thead>
@@ -308,11 +368,11 @@ export default function App() {
             </thead>
             <tbody>
               {filteredFindings.map((finding) => (
-                <tr key={finding.id} onClick={() => setSelectedFinding(finding)}>
+                <tr key={finding.id} onClick={() => loadFindingDetail(finding.id)}>
                   <td>{finding.severity}</td>
                   <td>{finding.status}</td>
-                  <td>{finding.type}</td>
-                  <td>{finding.title || finding.message || finding.id}</td>
+                  <td>{finding.finding_type}</td>
+                  <td>{finding.title || finding.description || finding.id}</td>
                 </tr>
               ))}
             </tbody>
@@ -325,16 +385,36 @@ export default function App() {
         {!selectedFinding && <p className="muted">Select a finding after inspection completes.</p>}
         {selectedFinding && (
           <>
+            <dl className="finding-meta">
+              <div>
+                <dt>Expected</dt>
+                <dd>{formatValue(selectedFinding.expected_value)}</dd>
+              </div>
+              <div>
+                <dt>Actual</dt>
+                <dd>{formatValue(selectedFinding.actual_value)}</dd>
+              </div>
+              <div>
+                <dt>Entity</dt>
+                <dd>{selectedFinding.entity_type || "n/a"}</dd>
+              </div>
+              <div>
+                <dt>Field</dt>
+                <dd>{selectedFinding.field_name || "n/a"}</dd>
+              </div>
+            </dl>
             <div className="evidence">
-              <article>
-                <h3>Source evidence</h3>
-                <p>{selectedFinding.source_text || "No source evidence URL/text in API response."}</p>
-              </article>
-              <article>
-                <h3>Target evidence</h3>
-                <p>{selectedFinding.target_text || "No target evidence URL/text in API response."}</p>
-              </article>
+              {(["EXPECTED", "ACTUAL"] as const).map((side) => (
+                <article key={side}>
+                  <h3>{side === "EXPECTED" ? "Expected evidence" : "Actual evidence"}</h3>
+                  {renderEvidence(selectedFinding, side)}
+                </article>
+              ))}
             </div>
+            <label className="review-comment">
+              Review comment
+              <textarea value={reviewComment} onChange={(event) => setReviewComment(event.target.value)} />
+            </label>
             <div className="actions">
               <button type="button" onClick={() => reviewFinding("CONFIRMED")}>
                 Confirm
@@ -350,5 +430,68 @@ export default function App() {
         )}
       </section>
     </main>
+  );
+}
+
+function cancellableDelay(milliseconds: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const timeout = window.setTimeout(resolve, milliseconds);
+    signal.addEventListener(
+      "abort",
+      () => {
+        window.clearTimeout(timeout);
+        reject(new DOMException("Polling cancelled", "AbortError"));
+      },
+      { once: true },
+    );
+  });
+}
+
+function formatValue(value: unknown) {
+  if (value === undefined || value === null || value === "") return "n/a";
+  return typeof value === "string" || typeof value === "number" ? String(value) : JSON.stringify(value);
+}
+
+function renderEvidence(finding: Finding, side: "EXPECTED" | "ACTUAL") {
+  const evidence = finding.evidence?.find((item) => item.side === side);
+  if (!evidence) return <p className="muted">No {side.toLowerCase()} evidence in API response.</p>;
+  return <EvidenceCard key={evidence.document_id} evidence={evidence} side={side} />;
+}
+
+function EvidenceCard({ evidence, side }: { evidence: NonNullable<Finding["evidence"]>[number]; side: string }) {
+  const [url, setUrl] = useState(evidence.pdf_url || evidence.file_url || evidence.url);
+  const [error, setError] = useState<string | null>(null);
+
+  async function openPdf() {
+    if (!evidence.download_url) return;
+    try {
+      const result = await apiRequest<{ url: string }>(evidence.download_url.replace(/^\/api\/v1/, ""));
+      setUrl(result.url);
+      setError(null);
+    } catch (cause) {
+      setError(publicError(cause).text);
+    }
+  }
+
+  return (
+    <div className="evidence-body">
+      <p>
+        <strong>{evidence.document_stage || "Document"}</strong>
+        {evidence.document_name ? `: ${evidence.document_name}` : ""}
+      </p>
+      <p>Page: {evidence.page_number || "n/a"}</p>
+      <p>{evidence.quote || "No quote returned."}</p>
+      <pre>{formatValue(evidence.bbox)}</pre>
+      {evidence.download_url && <button type="button" className="ghost" onClick={openPdf}>Open PDF evidence</button>}
+      {error && <p role="alert" className="bad">{error}</p>}
+      {url && (
+        <>
+          <a href={url} target="_blank" rel="noreferrer">
+            Open PDF
+          </a>
+          <iframe title={`${side} PDF evidence`} src={url} />
+        </>
+      )}
+    </div>
   );
 }
