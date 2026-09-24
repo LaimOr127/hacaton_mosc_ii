@@ -126,7 +126,17 @@ def restart_stack() -> None:
     if os.getenv("E2E_SKIP_RESTART") == "1":
         return
     subprocess.run(["docker", "compose", "restart", "n8n-main", "n8n-worker"], cwd=ROOT, check=True)
-    time.sleep(10)
+
+
+def wait_for_finding(finding_id: str) -> dict[str, Any]:
+    deadline = time.monotonic() + TIMEOUT
+    while True:
+        try:
+            return envelope(request(f"/findings/{finding_id}"))
+        except (AssertionError, urllib.error.URLError):
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(2)
 
 
 def main() -> None:
@@ -212,7 +222,7 @@ def main() -> None:
 
     restart_stack()
 
-    persisted = envelope(request(f"/findings/{finding['id']}"))
+    persisted = wait_for_finding(finding["id"])
     assert "CONFIRMED" in finding_text(persisted), persisted
     print(json.dumps({"project_id": project_id, "inspection_id": inspection_id, "finding_id": finding["id"]}, indent=2))
 
