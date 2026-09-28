@@ -76,34 +76,19 @@ services:
     restart: unless-stopped
 
   minio:
-    image: minio/minio:latest
-    command: server /data --console-address :9001
+    image: chrislusf/seaweedfs:latest
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_BUCKET: ${MINIO_BUCKET_DOCUMENTS},${MINIO_BUCKET_DERIVED},${MINIO_BUCKET_EXPORTS}
     volumes: [minio_data:/data]
     networks: [internal]
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/ready"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:9333/cluster/status"]
       interval: 5s
       timeout: 3s
       retries: 20
     restart: unless-stopped
-
-  minio-init:
-    image: minio/mc:latest
-    depends_on:
-      minio: {condition: service_healthy}
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-      MINIO_BUCKET_DOCUMENTS: ${MINIO_BUCKET_DOCUMENTS}
-      MINIO_BUCKET_DERIVED: ${MINIO_BUCKET_DERIVED}
-      MINIO_BUCKET_EXPORTS: ${MINIO_BUCKET_EXPORTS}
-    entrypoint: ["/bin/sh", "/init/minio.sh"]
-    volumes: [./scripts/minio-init.sh:/init/minio.sh:ro]
-    networks: [internal]
-    restart: "no"
 
   storage-api:
     build:
@@ -113,7 +98,7 @@ services:
       minio: {condition: service_healthy}
     environment:
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
-      MINIO_ENDPOINT: minio:9000
+      MINIO_ENDPOINT: minio:8333
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
       PUBLIC_STORAGE_BASE_URL: ${APP_BASE_URL}/storage
@@ -154,7 +139,7 @@ services:
     environment:
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
       MAX_PDF_PAGES: ${MAX_PDF_PAGES}
-      MINIO_ENDPOINT: minio:9000
+      MINIO_ENDPOINT: minio:8333
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     networks: [internal]
@@ -172,7 +157,7 @@ services:
       OCR_LANGUAGES: ${OCR_LANGUAGES}
       OCR_DPI: ${OCR_DPI}
       OCR_TIMEOUT_SECONDS: ${OCR_TIMEOUT_SECONDS}
-      MINIO_ENDPOINT: minio:9000
+      MINIO_ENDPOINT: minio:8333
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     networks: [internal]
