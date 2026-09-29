@@ -51,6 +51,7 @@ jobs:
         run: |
           ./scripts/generate-secrets.sh
           docker compose up -d --build
+          docker compose restart n8n-main
           for attempt in $(seq 1 90); do
             if curl --fail --silent http://localhost/api/v1/health >/dev/null; then exit 0; fi
             sleep 2

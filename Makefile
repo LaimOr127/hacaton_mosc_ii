@@ -15,6 +15,7 @@ build: # build service images
 
 up: # start the stack without deleting volumes
 	@docker compose up -d
+	@docker compose restart n8n-main
 
 migrate: # rerun idempotent application migrations
 	@docker compose run --rm db-migrate
